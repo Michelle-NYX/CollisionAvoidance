@@ -198,9 +198,9 @@ function construct_coupled_tracking_QP(dynamics::VehicleModel{T}, control_params
     N_short, N_long, dt = time_steps.N_short, time_steps.N_long, time_steps.dt
     u_normalization = SVector{2,T}(dynamics.control_limits.δ_max, max(-dynamics.control_limits.Fx_min, dynamics.control_limits.Fx_max))
 
-    optimizer = OSQPOptimizer()
-    MOI.set!(optimizer, OSQPSettings.Verbose(), false)
-    MOI.set!(optimizer, OSQPSettings.WarmStart(), true)
+    optimizer = OSQP.Optimizer()# Michelle changed 2/20/19
+    MOI.set(optimizer, OSQPSettings.Verbose(), false)# Michelle changed 2/20/19
+    MOI.set(optimizer, OSQPSettings.WarmStart(), true)# Michelle changed 2/20/19
     m = Model{T}(optimizer)
 
     Q_Δs   = Parameter(Diagonal(control_params.Q_Δs .* dt), m)

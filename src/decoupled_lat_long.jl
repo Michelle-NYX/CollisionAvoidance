@@ -134,9 +134,9 @@ end
 function construct_lateral_tracking_QP(dynamics::VehicleModel{T}, control_params, time_steps, qs, us, ps) where {T}
     N_short, N_long, dt = time_steps.N_short, time_steps.N_long, time_steps.dt
 
-    optimizer = OSQPOptimizer()
-    MOI.set!(optimizer, OSQPSettings.Verbose(), false)
-    MOI.set!(optimizer, OSQPSettings.WarmStart(), true)
+    optimizer = OSQP.Optimizer()
+    MOI.set(optimizer, OSQPSettings.Verbose(), false) #Michelle changed on 2/20/19
+    MOI.set(optimizer, OSQPSettings.WarmStart(), true) #Michelle changed on 2/20/19
     m = Model{T}(optimizer)
 
     Q_Δψ   = Parameter(Diagonal(control_params.Q_Δψ .* dt), m)

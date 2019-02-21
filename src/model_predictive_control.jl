@@ -8,12 +8,14 @@ struct MPCTimeSteps{T}
     use_correction_step::Bool
     prev_ts::Vector{T}
 end
+
 function MPCTimeSteps(N_short::Int, N_long::Int, dt_short::T, dt_long::T, use_correction_step::Bool) where {T}
     N = 1 + N_short + N_long
     ts = T.(1:N)    # initialized so that dt's are nonzero
     dt = diff(ts)
     MPCTimeSteps(ts, dt, N_short, N_long, dt_short, dt_long, use_correction_step, ts)
 end
+
 function compute_time_steps!(TS::MPCTimeSteps, t0)
     N_short, N_long, dt_short, dt_long, use_correction_step = TS.N_short, TS.N_long, TS.dt_short, TS.dt_long, TS.use_correction_step
 
@@ -47,7 +49,7 @@ mutable struct TrajectoryTrackingMPC{T,C,Q,U,P,QPP,QPV}
     ps::Vector{P}
 
     tracking_dynamics::VehicleModel{T}
-    model::Model{T,OSQPOptimizer}
+    model::Model{T, Optimizer} # Michelle changed 2/20/19
     variables::QPV
     parameters::QPP
     solved::Bool
@@ -56,6 +58,7 @@ mutable struct TrajectoryTrackingMPC{T,C,Q,U,P,QPP,QPV}
     HJI_cache::HJICache
     HJI_ϵ::T
 end
+
 function TrajectoryTrackingMPC(vehicle, trajectory, dynamics, control_params,
                                current_state::BicycleState{T}, current_control, heartbeat, time_offset,
                                time_steps, qs, us, ps,
