@@ -338,8 +338,14 @@ function update_QP!(mpc::TrajectoryTrackingMPC, QPP::TrackingQPParams)
         QPP.B[t]() .= (ZOHt.B .* u_normalization')
         QPP.c[t]() .= ZOHt.c
     end
+    # Dist-based
     relative_state = HJIRelativeState(mpc.current_state, mpc.other_car_state)
     M, b = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache, relative_state, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
+    
+    # Human-based
+    relative_state_Human = HJIRelativeState_Human(mpc.current_state, mpc.other_car_state)
+    M_h, b_h = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache_Human, relative_state_Human, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
+    
     # QPP.W_HJI() .= control_params.W_HJI .* ones(N_short)
     QPP.W_HJI() .= control_params.W_HJI .* [ones(control_params.N_HJI); zeros(N_short - control_params.N_HJI)]
     QPP.M_HJI() .= (M .* u_normalization)'

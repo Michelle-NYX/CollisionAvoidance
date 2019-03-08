@@ -18,7 +18,7 @@ end
 end
 
 function HJIRelativeState(us::BicycleState, them::SimpleCarState)
-    cψ, sψ = sincos(us.ψ)
+    cψ, sψ = sincos(us.ψ) # BUG???
     ΔE, ΔN = @SMatrix([cψ sψ; -sψ cψ])*SVector(them.E - us.E, them.N - us.N)
     HJIRelativeState(ΔE, ΔN, adiff(them.ψ, us.ψ), us.Ux, us.Uy, them.V, us.r)
 end
@@ -157,13 +157,14 @@ function optimal_control(X::VehicleModel, relative_state::HJIRelativeState, ∇V
     BicycleControl2(δ_opt, Fx_opt)
 end
 
-function compute_reachability_constraint(X::VehicleModel, cache::HJICache, relative_state::HJIRelativeState, ϵ,
+function compute_reachability_constraint(X::VehicleModel, cache::HJICache, relative_state::HJIRelativeState, ϵ = 10.,
                                          uR_lin=optimal_control(X, relative_state, cache[relative_state].∇V))    # definitely not the correct choice...
     V, ∇V = cache[relative_state]
     if V > ϵ
         (M=SVector{2,Float64}(0, 0), b=1.0)
     else
         uH_opt = optimal_disturbance(X, relative_state, ∇V)
+        
         ∇H_uR = ForwardDiff.gradient(uR -> dot(∇V, relative_dynamics(X, SVector(relative_state), uR, SVector(uH_opt))), SVector(uR_lin))
         (M=∇H_uR, b=dot(∇V, relative_dynamics(X, relative_state, uR_lin, uH_opt)) - dot(∇H_uR, uR_lin)) # so that H = dot(∇V, uR) ≈ ∇H_uR*uR + c
     end
