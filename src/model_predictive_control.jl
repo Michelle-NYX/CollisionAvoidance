@@ -55,8 +55,10 @@ mutable struct TrajectoryTrackingMPC{T,C,Q,U,P,QPP,QPV}
     solved::Bool
 
     other_car_state::SimpleCarState{T}
-    HJI_cache::HJICache
-    HJI_cache_Human::HJICache_Human
+    wall_state::Float64
+    HJI_cache_dist::HJICache
+    HJI_cache_human::HJICache_Human
+    HJI_cache_wall::HJICache_Wall
     HJI_ϵ::T
 end
 
@@ -68,7 +70,7 @@ function TrajectoryTrackingMPC(vehicle, trajectory, dynamics, control_params,
                           current_state, current_control, heartbeat, time_offset,
                           time_steps, qs, us, ps,
                           tracking_dynamics, model, variables, parameters, false,
-                          zeros(SimpleCarState{T}), placeholder_HJICache(), placeholder_HJICache_Human(), T(0.05))
+                          zeros(SimpleCarState{T}), 10., placeholder_HJICache(), placeholder_HJICache_Human(), placeholder_HJICache_Wall(), T(0.05))
 end
 
 compute_time_steps!(mpc::TrajectoryTrackingMPC, t0) = compute_time_steps!(mpc.time_steps, t0)
@@ -85,11 +87,13 @@ function simulate(mpc, q0, u0, dt=0.01)
     mpc.current_state = q0
     mpc.current_control = u0
     qs = []
+    qhs = []
     xs = []
     us = []
     ps = []
     for t in 0:dt:mpc.trajectory.t[end]
         push!(qs, mpc.current_state)
+        push!(qhs, mpc.other_car_state)
         push!(us, mpc.current_control)
         compute_time_steps!(mpc, t)
         compute_linearization_nodes!(mpc)
@@ -97,8 +101,9 @@ function simulate(mpc, q0, u0, dt=0.01)
         solve!(mpc)
         mpc.current_state = propagate(mpc.dynamics, mpc.current_state, StepControl(dt, BicycleControl2(mpc.current_control)))
         mpc.current_control = get_next_control(mpc)
+        mpc.other_car_state = simple_car_dynamics(mpc.other_car_state, 0.)*dt + mpc.other_car_state
         push!(xs, mpc.qs[1])
         push!(ps, mpc.ps[1])
     end
-    qs, xs, us, ps
+    qs, qhs, xs, us, ps
 end

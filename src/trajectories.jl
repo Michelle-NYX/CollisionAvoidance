@@ -98,8 +98,8 @@ function straight_trajectory(len, vel)
                    [0., len],     # s
                    [vel, vel],    # V
                    [0., 0.],      # A
-                   [0., 0.],      # E
-                   [0., len],     # N
-                   [0., 0.],      # ψ
+                   [0., len],      # E
+                   [0., 0.],     # N
+                   [-pi/2., -pi/2],      # ψ
                    [0., 0.])      # κ
 end

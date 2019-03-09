@@ -95,7 +95,7 @@ BicycleModel(vehicle::Dict) = BicycleModel(BicycleModelParams(vehicle))
 @maintain_type struct BicycleState{T} <: FieldVector{6,T}
     E::T    # world frame "x" position of CM
     N::T    # world frame "y" position of CM
-    ψ::T    # world frame heading of vehicle
+    ψ::T    # world frame heading of vehicle-->rel to N
     Ux::T   # body frame longitudinal speed
     Uy::T   # body frame lateral speed
     r::T    # yaw rate (dψ/dt)

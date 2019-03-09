@@ -1,3 +1,5 @@
+# A reproduction of coupled_lat_long.jl
+
 struct JointControlParams{T}
     V_min::T
     V_max::T
@@ -5,7 +7,7 @@ struct JointControlParams{T}
     k_V::T    # used only for initial seeding of linearization nodes
     k_s::T
 
-    δ̇_max::T
+    dδ̇_max::T
 
     Q_Δs::T
     Q_Δψ::T
@@ -24,7 +26,7 @@ function JointControlParams(;V_min=1.0,
                                V_max=15.0,
                                k_V=10/4/100,
                                k_s=10/4/10000,
-                               δ̇_max=0.344,
+                               dδ̇_max=0.344,
                                Q_Δs=1.0,
                                Q_Δψ=1.0,
                                Q_e=1.0,
@@ -36,7 +38,7 @@ function JointControlParams(;V_min=1.0,
                                R_Δδ=0.1,
                                R_Fx=0.0,
                                R_ΔFx=0.5)
-    JointControlParams(V_min, V_max, k_V, k_s, δ̇_max, Q_Δs, Q_Δψ, Q_e, W_β, W_r, W_HJI, N_HJI, R_δ, R_Δδ, R_Fx, R_ΔFx)
+    JointControlParams(V_min, V_max, k_V, k_s, dδ̇_max, Q_Δs, Q_Δψ, Q_e, W_β, W_r, W_HJI, N_HJI, R_δ, R_Δδ, R_Fx, R_ΔFx)
 end
 
 function JointTrajectoryTrackingMPC(vehicle::Dict{Symbol,T}, trajectory::TrajectoryTube{T}; control_params=JointControlParams(),
@@ -154,8 +156,10 @@ struct TrackingQPParams{T}
     W_HJI ::Parameter{Vector{T},typeof(identity),true}
     q_curr::Parameter{Vector{T},typeof(identity),true}
     u_curr::Parameter{Vector{T},typeof(identity),true}
-    M_HJI ::Parameter{Matrix{T},typeof(identity),true}
-    b_HJI ::Parameter{Matrix{T},typeof(identity),true}
+    M1_HJI ::Parameter{Matrix{T},typeof(identity),true}
+    b1_HJI ::Parameter{Matrix{T},typeof(identity),true}
+    M2_HJI ::Parameter{Matrix{T},typeof(identity),true}
+    b2_HJI ::Parameter{Matrix{T},typeof(identity),true}
     A     ::Vector{Parameter{Matrix{T},typeof(identity),true}}
     B     ::Vector{Parameter{Matrix{T},typeof(identity),true}}
     B0    ::Vector{Parameter{Matrix{T},typeof(identity),true}}
@@ -166,6 +170,7 @@ struct TrackingQPParams{T}
     δ_min ::Vector{Parameter{Vector{T},typeof(identity),true}}
     δ_max ::Vector{Parameter{Vector{T},typeof(identity),true}}
     Fx_max::Vector{Parameter{Vector{T},typeof(identity),true}}
+    Fx_min::Vector{Parameter{Vector{T},typeof(identity),true}}
     Δδ_min::Vector{Parameter{Vector{T},typeof(identity),true}}
     Δδ_max::Vector{Parameter{Vector{T},typeof(identity),true}}
 end
@@ -174,16 +179,17 @@ struct TrackingQPVariables{T}
     q::Matrix{Variable}
     u::Matrix{Variable}
     σ::Matrix{Variable}
-    σ_HJI::Vector{Variable}
+    σ1_HJI::Vector{Variable}
+    σ2_HJI::Vector{Variable}
     u_normalization::SVector{2,T}
     q_interp::GriddedInterpolation{TrackingBicycleState{T},1,TrackingBicycleState{T},Gridded{Linear},Tuple{Vector{T}}}
     u_interp::GriddedInterpolation{BicycleControl2{T},1,BicycleControl2{T},Gridded{Linear},Tuple{Vector{T}}}
 end
-function TrackingQPVariables(q::Matrix{Variable}, u::Matrix{Variable}, σ::Matrix{Variable}, σ_HJI::Vector{Variable}, u_normalization::SVector{2,T}) where {T}
+function TrackingQPVariables(q::Matrix{Variable}, u::Matrix{Variable}, σ::Matrix{Variable}, σ1_HJI::Vector{Variable}, σ2_HJI::Vector{Variable}, u_normalization::SVector{2,T}) where {T}
     N = size(q, 2)
     q_interp = interpolate(T, TrackingBicycleState{T}, (T.(1:N),), zeros(TrackingBicycleState{T}, N), Gridded(Linear()))
     u_interp = interpolate(T, BicycleControl2{T}, (T.(1:N),), zeros(BicycleControl2{T}, N), Gridded(Linear()))
-    TrackingQPVariables(q, u, σ, σ_HJI, u_normalization, q_interp, u_interp)
+    TrackingQPVariables(q, u, σ, σ1_HJI, σ2_HJI, u_normalization, q_interp, u_interp)
 end
 
 function update_interpolations!(variables::TrackingQPVariables, model::Model{T}, prev_ts) where {T}
@@ -196,7 +202,8 @@ end
 
 function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, time_steps, qs, us, ps) where {T}
     N_short, N_long, dt = time_steps.N_short, time_steps.N_long, time_steps.dt
-    u_normalization = SVector{2,T}(dynamics.control_limits.δ_max, max(-dynamics.control_limits.Fx_min, dynamics.control_limits.Fx_max))
+    mass = 1964.
+    u_normalization = SVector{2,T}(deg2rad(60), 3.5*mass)
 
     optimizer = OSQP.Optimizer()# Michelle changed 2/20/19
     MOI.set(optimizer, OSQPSettings.Verbose(), false)# Michelle changed 2/20/19
@@ -215,8 +222,10 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
     W_HJI  = Parameter(control_params.W_HJI .* ones(N_short), m)
     q_curr = Parameter(Array(qs[1]), m)
     u_curr = Parameter(Array(us[1] ./ u_normalization), m)
-    M_HJI  = Parameter(zeros(T, 1, 2), m)
-    b_HJI  = Parameter(ones(T, 1, N_short), m)
+    M1_HJI  = Parameter(zeros(T, 1, 2), m)
+    b1_HJI  = Parameter(ones(T, 1, N_short), m)
+    M2_HJI  = Parameter(zeros(T, 1, 2), m)
+    b2_HJI  = Parameter(ones(T, 1, N_short), m)
     A      = Parameter{Matrix{T},typeof(identity),true}[]
     B      = Parameter{Matrix{T},typeof(identity),true}[]
     B0     = Parameter{Matrix{T},typeof(identity),true}[]
@@ -227,25 +236,28 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
     δ_min  = Parameter{Vector{T},typeof(identity),true}[]
     δ_max  = Parameter{Vector{T},typeof(identity),true}[]
     Fx_max = Parameter{Vector{T},typeof(identity),true}[]
+    Fx_min = Parameter{Vector{T},typeof(identity),true}[]
     Δδ_min = Parameter{Vector{T},typeof(identity),true}[]
     Δδ_max = Parameter{Vector{T},typeof(identity),true}[]
 
     q     = [Variable(m) for i in 1:6, t in 1:N_short+N_long+1]    # (Δs, Ux, Uy, r, Δψ, e)
     u     = [Variable(m) for i in 1:2, t in 1:N_short+N_long+1]    # (δ, Fx)
     σ     = [Variable(m) for i in 1:2, t in 1:N_short+N_long]
-    σ_HJI = [Variable(m) for t in 1:N_short]
+    σ1_HJI = [Variable(m) for t in 1:N_short]
+    σ2_HJI = [Variable(m) for t in 1:N_short]
     Δδ    = [Variable(m) for t in 1:N_short+N_long]
     ΔFx   = [Variable(m) for t in 1:N_short+N_long]
     δ     = u[1,:]
     Fx    = u[2,:]
     Ux    = q[2,:]
     @constraint(m, vec(σ) >= fill(T(0), 2*(N_short+N_long)))
-    @constraint(m, σ_HJI  >= fill(T(0), N_short))
+    @constraint(m, σ1_HJI  >= fill(T(0), N_short))
+    @constraint(m, σ2_HJI  >= fill(T(0), N_short))
     @constraint(m, diff(δ) == Δδ)
     @constraint(m, diff(Fx) == ΔFx)
     @constraint(m, Ux >= fill(control_params.V_min, N_short+N_long+1))    # may need slacks
     @constraint(m, Ux <= fill(control_params.V_max, N_short+N_long+1))
-    @constraint(m, Fx >= fill(dynamics.control_limits.Fx_min / u_normalization[2], N_short+N_long+1))
+    @constraint(m, Fx >= fill(-3.5*mass, N_short+N_long+1))
 
     @constraint(m, q[:,1] == q_curr)
     @constraint(m, u[:,1] == u_curr)
@@ -256,7 +268,8 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
         ct = push!(c, Parameter(Array(ZOHt.c), m))[end]
         @constraint(m, At*q[:,t] + Bt*u[:,t] + ct == q[:,t+1])
     end
-    @constraint(m, vec(M_HJI*u[:,1:N_short] + b_HJI) >= -σ_HJI)
+    @constraint(m, vec(M1_HJI*u[:,1:N_short] + b1_HJI) >= -σ1_HJI)
+    @constraint(m, vec(M2_HJI*u[:,1:N_short] + b2_HJI) >= -σ2_HJI)
 
     for t in N_short+1:N_short+N_long
         FOHt = linearize(dynamics, qs[t], RampControl(dt[t], [us[t]; ps[t]], [us[t+1]; ps[t+1]]), keep_control_dims=SVector(1,2))
@@ -267,8 +280,8 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
         @constraint(m, At*q[:,t] + B0t*u[:,t] + Bft*u[:,t+1] + ct == q[:,t+1])
     end
 
-    δ_max_, δ̇_max   = dynamics.control_limits.δ_max, control_params.δ̇_max
-    Fx_max_, Px_max = dynamics.control_limits.Fx_max, dynamics.control_limits.Px_max
+    δ_max_, dδ̇_max   = deg2rad(60), control_params.dδ̇_max
+    Px_max = dynamics.control_limits.Px_max
     for t in 1:N_short+N_long
         Uxt = qs[t+1].Ux
         Fxft, Fxrt = longitudinal_tire_forces(dynamics.longitudinal_params, us[t+1].Fx)
@@ -277,15 +290,17 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
         Gt = push!(G, Parameter(Array(Gt), m))[end]
         δ_mint  = push!(δ_min,  Parameter([max(δ_mint, -δ_max_) / u_normalization[1]], m))[end]
         δ_maxt  = push!(δ_max,  Parameter([min(δ_maxt, δ_max_)  / u_normalization[1]], m))[end]
-        Fx_maxt = push!(Fx_max, Parameter([min(Px_max/Uxt, Fx_max_) / u_normalization[2]], m))[end]
+        Fx_maxt = push!(Fx_max, Parameter([2.0*mass / u_normalization[2]], m))[end]
+        Fx_mint = push!(Fx_min, Parameter([-3.5*mass / u_normalization[2]], m))[end]
         Uy_r = q[3:4,t+1]
         σt   = [σ[1,t],σ[1,t],σ[2,t],σ[2,t]]
         Δδt  = [Δδ[t]]
-        Δδ_mint = push!(Δδ_min, Parameter([-δ̇_max*dt[t] / u_normalization[1]], m))[end]
-        Δδ_maxt = push!(Δδ_max, Parameter([ δ̇_max*dt[t] / u_normalization[1]], m))[end]
+        Δδ_mint = push!(Δδ_min, Parameter([-dδ̇_max*dt[t] / u_normalization[1]], m))[end]
+        Δδ_maxt = push!(Δδ_max, Parameter([ dδ̇_max*dt[t] / u_normalization[1]], m))[end]
         @constraint(m, [δ[t+1]] <= δ_maxt)
         @constraint(m, [δ[t+1]] >= δ_mint)
         @constraint(m, [Fx[t+1]] <= Fx_maxt)
+        @constraint(m, [Fx[t+1]] >= Fx_mint)
         @constraint(m, Ht*Uy_r - Gt <= σt)
         @constraint(m, Δδt <= Δδ_maxt)
         @constraint(m, Δδt >= Δδ_mint)
@@ -305,11 +320,11 @@ function construct_joint_tracking_QP(dynamics::VehicleModel{T}, control_params, 
                        transpose(Δδ)*R_Δδ*Δδ +
                        transpose(Fx⁺)*R_Fx*Fx⁺ +
                        transpose(ΔFx)*R_ΔFx*ΔFx +
-                       W_β⋅σ1 + W_r⋅σ2 + W_HJI⋅σ_HJI
+                       W_β⋅σ1 + W_r⋅σ2 + W_HJI⋅σ1_HJI + W_HJI⋅σ2_HJI
     @objective(m, Minimize, obj)
-    m, TrackingQPVariables(q, u, σ, σ_HJI, u_normalization), TrackingQPParams(Q_Δs, Q_Δψ, Q_e, R_δ, R_Δδ, R_Fx, R_ΔFx, W_β, W_r, W_HJI,
-                                                                              q_curr, u_curr, M_HJI, b_HJI, A, B, B0, Bf, c, H, G,
-                                                                              δ_min, δ_max, Fx_max, Δδ_min, Δδ_max)
+    m, TrackingQPVariables(q, u, σ, σ1_HJI, σ2_HJI, u_normalization), TrackingQPParams(Q_Δs, Q_Δψ, Q_e, R_δ, R_Δδ, R_Fx, R_ΔFx, W_β, W_r, W_HJI,
+                                                                              q_curr, u_curr, M1_HJI, b1_HJI,M2_HJI, b2_HJI, A, B, B0, Bf, c, H, G,
+                                                                              δ_min, δ_max, Fx_max, Fx_min, Δδ_min, Δδ_max)
 end
 
 function update_QP!(mpc::TrajectoryTrackingMPC, QPP::TrackingQPParams)
@@ -340,16 +355,24 @@ function update_QP!(mpc::TrajectoryTrackingMPC, QPP::TrackingQPParams)
     end
     # Dist-based
     relative_state = HJIRelativeState(mpc.current_state, mpc.other_car_state)
-    M, b = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache, relative_state, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
+    M_d, b_d = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache_dist, relative_state, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
     
     # Human-based
-    relative_state_Human = HJIRelativeState_Human(mpc.current_state, mpc.other_car_state)
-    M_h, b_h = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache_Human, relative_state_Human, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
+    relative_state_human = HJIRelativeState_Human(mpc.current_state, mpc.other_car_state)
+    M_h, b_h = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache_human, relative_state_human, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
     
+    # Wall-based
+    relative_state_wall = HJIRelativeState_Wall(mpc.current_state, mpc.wall_state)
+    M_w, b_w = compute_reachability_constraint(mpc.dynamics, mpc.HJI_cache_wall, relative_state_wall, mpc.HJI_ϵ, BicycleControl2(mpc.current_control))
+
+
     # QPP.W_HJI() .= control_params.W_HJI .* ones(N_short)
     QPP.W_HJI() .= control_params.W_HJI .* [ones(control_params.N_HJI); zeros(N_short - control_params.N_HJI)]
-    QPP.M_HJI() .= (M .* u_normalization)'
-    QPP.b_HJI() .= b
+    QPP.M1_HJI() .= (M_h .* u_normalization)'
+    QPP.b1_HJI() .= b_h
+    QPP.M2_HJI() .= (M_w .* u_normalization)'
+    QPP.b2_HJI() .= b_w
+
     for t in N_short+1:N_short+N_long
         FOHt = linearize(dynamics, qs[t], RampControl(dt[t], [us[t]; ps[t]], [us[t+1]; ps[t+1]]), keep_control_dims=SVector(1,2))
         QPP.A[t]() .= FOHt.A
@@ -357,8 +380,13 @@ function update_QP!(mpc::TrajectoryTrackingMPC, QPP::TrackingQPParams)
         QPP.Bf[t-N_short]() .= (FOHt.Bf .* u_normalization')
         QPP.c[t]() .= FOHt.c
     end
-    δ_max, δ̇_max   = dynamics.control_limits.δ_max, control_params.δ̇_max
-    Fx_max, Px_max = dynamics.control_limits.Fx_max, dynamics.control_limits.Px_max
+    δ_max, dδ̇_max   = deg2rad(60), control_params.dδ̇_max
+    Px_max = dynamics.control_limits.Px_max
+    mass = 1964.0
+    Fx_max = 2.0 * mass
+    Fx_min = -3.5 * mass
+    aMax = 2.
+    aMin = -3.5
     for t in 1:N_short+N_long
         Uxt = qs[t+1].Ux
         Fxft, Fxrt = longitudinal_tire_forces(dynamics.longitudinal_params, us[t+1].Fx)
@@ -367,9 +395,10 @@ function update_QP!(mpc::TrajectoryTrackingMPC, QPP::TrackingQPParams)
         QPP.G[t]() .= Gt
         QPP.δ_min[t]()  .= max(δ_mint, -δ_max) / u_normalization[1]
         QPP.δ_max[t]()  .= min(δ_maxt,  δ_max) / u_normalization[1]
-        QPP.Fx_max[t]() .= min(Px_max/Uxt, Fx_max) / u_normalization[2]
-        QPP.Δδ_min[t]() .= -δ̇_max*dt[t] / u_normalization[1]
-        QPP.Δδ_max[t]() .=  δ̇_max*dt[t] / u_normalization[1]
+        QPP.Fx_max[t]() .= Fx_max / u_normalization[2]
+        QPP.Fx_min[t]() .= Fx_min / u_normalization[2]
+        QPP.Δδ_min[t]() .= -dδ̇_max*dt[t] / u_normalization[1]
+        QPP.Δδ_max[t]() .=  dδ̇_max*dt[t] / u_normalization[1]
     end
 end
 

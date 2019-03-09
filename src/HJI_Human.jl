@@ -10,15 +10,16 @@ end
 @maintain_type struct HJIRelativeState_Human{T} <: FieldVector{5,T}
     E_rel::T #relative 'x' position in Robot frame
     N_rel::T #relative 'y' position in Robot frame
-    ψ_us::T # world frame heading of robot
-    ψ_them::T # world frame heading of human
+    ψ_us::T # world frame heading of robot (from E) (need converter)
+    ψ_them::T # world frame heading of human (from E)
     Ux::T # robot longitudinal velocity
 end
 
 function HJIRelativeState_Human(us::BicycleState, them::SimpleCarState)
-    sψ, cψ = sincos(us.ψ)
+    us_ψ = pi/2 + us.ψ
+    sψ, cψ = sincos(us_ψ)
     E_rel, N_rel = @SMatrix([cψ sψ; -sψ cψ])*SVector(them.E - us.E, them.N - us.N)
-    HJIRelativeState_Human(E_rel, N_rel, us.ψ, them.ψ, us.Ux)
+    HJIRelativeState_Human(E_rel, N_rel, us_ψ, them.ψ, us.Ux)
 end
 
 struct HJICache_Human
@@ -61,6 +62,16 @@ function Base.getindex(cache::HJICache_Human, x::HJIRelativeState_Human{T}) wher
     end
 end
 
+function simple_car_dynamics((E, N, ψ, V)::StaticVector{4}, ωH::Float64)
+    sψ, cψ = sincos(ψ)
+    SVector(
+        V*cψ,
+        V*sψ,
+        ωH,
+        0.
+        )
+end
+
 function relative_dynamics(X::VehicleModel, (E_rel, N_rel, ψ_us, ψ_them, Ux)::StaticVector{5},    # relative state
                                             uR::StaticVector{2},                       # robot control
                                             ω::Float64)                        # human control
@@ -99,7 +110,7 @@ function optimal_control(X::VehicleModel, relative_state::HJIRelativeState_Human
 
     sgn = (uMode == :max ? 1 : -1)
 
-    A = ∇V[1] * relative.N_rel - ∇V[2] * relative.E_rel + ∇V[3] #steer
+    A = ∇V[1] * relative_state.N_rel - ∇V[2] * relative_state.E_rel + ∇V[3] #steer
     B = ∇V[5] # accel
     
     δ_opt  = ifelse(A >= 0, sgn*ωLimit, -sgn*ωLimit)
